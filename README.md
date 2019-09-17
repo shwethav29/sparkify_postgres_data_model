@@ -39,7 +39,9 @@ time data. The time table helps to slice and dice data based on different time v
  >>>>start_time bigint,hour int,day int,week int,month int, year int,weekday int 
 
 ### >**ETL Pipeline**
-We will be using python pandas to read the json files from the log_data and song_data. Firstly we will be populating the dimension tables.
+We will be using python pandas to read the json files from the log_data and song_data. The data is loaded to stage tables first.
+Followed by bulk insert. This gives a better performance compared to, inserting single row data.
+Firstly we will be populating the dimension tables.
 Followed by reading the artist_id and song_id keys from these dimension table to populate the songplays table.
 We are interested only in log_data with page='NextPage'. The timestamp column mapped to the time table by extracting datetime properties for the give timestamp. 
 ##Project Structure

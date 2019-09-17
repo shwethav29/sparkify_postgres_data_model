@@ -1,8 +1,12 @@
 import os
 import glob
 import psycopg2
+import time
+import csv
 import pandas as pd
 from sql_queries import *
+from io import StringIO
+import io
 
 
 def process_song_file(cur, filepath):
@@ -21,6 +25,27 @@ def process_song_file(cur, filepath):
     cur.execute(artist_table_insert, artist_data)
 
 
+def create_stage_table(cur, table_name):
+    query = create_stage_table_queries[table_name]
+    cur.execute(query)
+
+
+def load_data_from_stage_table(cur, table_name):
+    query = load_from_stage_table_queries[table_name]
+    cur.execute(query)
+
+
+def drop_stage_table(cur, table_name):
+    query = drop_stage_table_queries[table_name]
+    cur.execute(query)
+
+def load_data_to_database(cur,data_df,stage_table_name,table_name,seperator):
+    data_io = io.StringIO()
+    data_df.to_csv(data_io, header=False, index=False,sep=seperator)
+    data_io.seek(0)
+    cur.copy_from(data_io,stage_table_name,sep=seperator)
+    load_data_from_stage_table(cur,table_name)
+
 def process_log_file(cur, filepath):
     # open log file
     df = pd.read_json(filepath, lines=True)
@@ -35,33 +60,23 @@ def process_log_file(cur, filepath):
     time_data = (df['ts'], t.dt.hour, t.dt.day, t.dt.weekofyear, t.dt.month, t.dt.year, t.dt.weekday)
     column_labels = ('start_time', 'hour', 'day', 'week', 'month', 'year', 'weekday')
     time_df = pd.DataFrame(dict(zip(column_labels, time_data)))
+    load_data_to_database(cur,time_df,"temp_time","time",',')
 
-    for i, row in time_df.iterrows():
-        cur.execute(time_table_insert, list(row))
+    # for i, row in time_df.iterrows():
+    #    cur.execute(time_table_insert, list(row))
 
-    # load user table
+    # load user table then copy to csv use copy from to load data to POSTGRES
     user_df = df[['userId', 'firstName', 'lastName', 'gender', 'level']]
+    user_df = user_df.drop_duplicates(subset=['userId'], keep=False)
+    load_data_to_database(cur, user_df, "temp_users", "users", ',')
 
     # insert user records
-    for i, row in user_df.iterrows():
-        cur.execute(user_table_insert, row)
+    # for i, row in user_df.iterrows():
+    #    cur.execute(user_table_insert, row)
 
-    # insert songplay records
-    for index, row in df.iterrows():
-
-        # get songid and artistid from song and artist tables
-        cur.execute(song_select, (row.song, row.artist, row.length))
-        results = cur.fetchone()
-
-        if results:
-            songid, artistid = results
-        else:
-            songid, artistid = None, None
-
-        # insert songplay record
-        songplay_data = (row.ts, row.userId, row.level, songid, artistid, row.sessionId, row.location, row.userAgent)
-        cur.execute(songplay_table_insert, songplay_data)
-
+    #load songplays data
+    song_play_df = df[['ts', 'userId', 'level', 'song', 'artist', 'sessionId', 'location', 'length', 'userAgent']]
+    load_data_to_database(cur, song_play_df, "temp_songplays", "songplays", '\t')
 
 def process_data(cur, conn, filepath, func):
     # get all files matching extension from directory
@@ -85,10 +100,22 @@ def process_data(cur, conn, filepath, func):
 def main():
     conn = psycopg2.connect("host=127.0.0.1 dbname=sparkifydb user=student password=student")
     cur = conn.cursor()
+    # create stage tables
+    start = time.time()
+    create_stage_table(cur, "time")
+    create_stage_table(cur, "users")
+    create_stage_table(cur, "songplays")
 
     process_data(cur, conn, filepath='data/song_data', func=process_song_file)
     process_data(cur, conn, filepath='data/log_data', func=process_log_file)
 
+    # drop stage tables
+    drop_stage_table(cur, "users")
+    drop_stage_table(cur, "time")
+    drop_stage_table(cur, "songplays")
+
+    end = time.time()
+    print("the etl takes", end - start, "seconds")
     conn.close()
 
 
